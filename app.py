@@ -27,7 +27,7 @@ def init_db():
         )
     """)
 
-    # Tabla de jugadores (Con estado de verificación IA)
+    # Tabla de jugadores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS jugadores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +42,15 @@ def init_db():
             FOREIGN KEY (id_partido) REFERENCES partidos (id)
         )
     """)
+
+    # --- MIGRACIÓN AUTOMÁTICA DE ESQUEMA ---
+    cursor.execute("PRAGMA table_info(jugadores)")
+    columnas = [col[1] for col in cursor.fetchall()]
+    if "estado_validacion" not in columnas:
+        cursor.execute(
+            "ALTER TABLE jugadores ADD COLUMN estado_validacion TEXT DEFAULT 'Confirmado'"
+        )
+
     conn.commit()
     conn.close()
 
@@ -145,10 +154,9 @@ with tabs[1]:
             partido_actual["equipo_visitante"],
         ]
 
-        # -----------------------------------------------------
-        # SECCIÓN A: AGREGAR JUGADOR INDIVIDUAL / DETECTADO
-        # -----------------------------------------------------
-        with st.expander("➕ Añadir Jugador Manual o Sugerido por IA", expanded=False):
+        with st.expander(
+            "➕ Añadir Jugador Manual o Sugerido por IA", expanded=False
+        ):
             with st.form("form_nuevo_jugador"):
                 col_e, col_a, col_b = st.columns(3)
                 with col_e:
@@ -210,9 +218,6 @@ with tabs[1]:
 
         st.divider()
 
-        # -----------------------------------------------------
-        # SECCIÓN B: TABLA EDITABLE EN TIEMPO REAL
-        # -----------------------------------------------------
         st.subheader("📋 Tabla de Plantilla Editable")
         st.caption(
             "Puedes hacer doble clic en cualquier celda para corregir dorsales, nombres, posiciones o estados directamente."
@@ -226,13 +231,12 @@ with tabs[1]:
             ORDER BY equipo ASC, dorsal ASC
         """,
             conn,
-            params=(partido_sel_id,),
+            params=(int(partido_sel_id),),
         )
 
         if jugadores_df.empty:
             st.info("No hay jugadores cargados para este partido.")
         else:
-            # Renderizar tabla interactiva
             edited_df = st.data_editor(
                 jugadores_df,
                 key="editor_jugadores",
@@ -333,7 +337,6 @@ with tabs[2]:
 
         col_sale, col_entra = st.columns(2)
 
-        # Jugadores registrados en este partido
         jugadores_activos = pd.read_sql(
             """
             SELECT id, equipo, dorsal, nombre, posicion 
@@ -342,7 +345,7 @@ with tabs[2]:
             ORDER BY equipo, dorsal
         """,
             conn,
-            params=(partido_cambio_id, minuto_cambio_actual),
+            params=(int(partido_cambio_id), int(minuto_cambio_actual)),
         )
 
         with col_sale:
@@ -413,30 +416,28 @@ with tabs[2]:
         ):
             if jugador_sale_id:
                 cursor = conn.cursor()
-                # 1. Actualizar el minuto de salida del que sale
                 cursor.execute(
                     "UPDATE jugadores SET minuto_salida = ? WHERE id = ?",
-                    (minuto_cambio_actual, jugador_sale_id),
+                    (int(minuto_cambio_actual), int(jugador_sale_id)),
                 )
-                # 2. Registrar al nuevo jugador que entra
                 cursor.execute(
                     """
                     INSERT INTO jugadores (id_partido, equipo, nombre, dorsal, posicion, minuto_entrada, minuto_salida, estado_validacion)
                     VALUES (?, ?, ?, ?, ?, ?, ?, 'Confirmado')
                 """,
                     (
-                        partido_cambio_id,
+                        int(partido_cambio_id),
                         eq_entra,
                         nombre_entra_final,
-                        dorsal_entra,
+                        int(dorsal_entra),
                         pos_entra,
-                        minuto_cambio_actual,
+                        int(minuto_cambio_actual),
                         90,
                     ),
                 )
                 conn.commit()
                 st.success(
-                    f"¡Sustitución efectuada en el minuto {minuto_cambio_actual}! Se cerró la participación del jugador que salió y se dio de alta al #{dorsal_entra} ({nombre_entra_final})."
+                    f"¡Sustitución efectuada en el minuto {minuto_cambio_actual}!"
                 )
                 st.rerun()
 
