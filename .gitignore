@@ -1,0 +1,8 @@
+# Base de datos local
+futbol_analytics.db
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+.venv/
+.vscode/
