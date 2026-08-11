@@ -247,12 +247,11 @@ with tabs[4]:
         st.divider()
 
         # 2. Maquetación del Reproductor y el Panel de IA
-        col_video, col_panel = st.columns([2, 1]) # El video ocupa 2/3, el panel 1/3 de la pantalla
+        col_video, col_panel = st.columns([2, 1])
         
         with col_video:
             st.subheader("📺 Reproductor de Partido")
             if url_embed:
-                # Incrustar el iframe de Google Drive
                 st.components.v1.iframe(url_embed, height=450)
                 st.caption(f"🔗 URL Original conectada: {url_original}")
             else:
@@ -260,27 +259,36 @@ with tabs[4]:
                 
         with col_panel:
             st.subheader("🧠 Panel de Control IA")
-            st.info("Módulo preparado para conectar al backend de Visión por Computadora.")
+            st.info("Módulo preparado para conectar al modelo de Visión por Computadora.")
             
             # Botones de simulación de Análisis
             if st.button("🚀 Iniciar Tracking IA (Detección)", use_container_width=True):
                 with st.spinner("Conectando con el modelo de visión..."):
                     import time
-                    time.sleep(2) # Simula tiempo de carga
-                    st.success("✅ Modelo conectado. Tracking activo sobre el video.")
+                    time.sleep(2)
+                    st.success("✅ Modelo simulado conectado.")
             
-            # Contenedores de métricas en vivo (Placeholders)
-            st.markdown("### Métricas en Vivo")
+            # --- CORRECCIÓN: LECTURA DE DATOS REALES ---
+            # Consultar cuántos jugadores hay registrados en este partido específico
+            jugadores_registrados = pd.read_sql(
+                "SELECT count(id) as total FROM jugadores WHERE id_partido = ?", 
+                conn, 
+                params=(int(partido_vid_id),)
+            )
+            total_jugadores = jugadores_registrados.iloc[0]["total"]
+
+            st.markdown("### Métricas del Partido")
             col_m1, col_m2 = st.columns(2)
-            col_m1.metric(label="Jugadores Detectados", value="22", delta="+2 en banca")
-            col_m2.metric(label="Precisión del Modelo", value="94.5%")
+            # Ahora muestra el número real de tu base de datos
+            col_m1.metric(label="Jugadores en Plantilla", value=f"{total_jugadores}", delta="Registrados")
+            col_m2.metric(label="Estado del Modelo", value="En Espera", delta_color="off")
             
             st.markdown("### Herramientas de Análisis")
-            st.checkbox("🟢 Mostrar IDs y Dorsales (Bounding Boxes)")
-            st.checkbox("🔥 Generar Mapa de Calor en Vivo")
-            st.checkbox("🏃 Mostrar Distancia Recorrida")
+            st.checkbox("🟢 Mostrar IDs y Dorsales (Bounding Boxes)", disabled=True, help="Se activará al conectar la IA")
+            st.checkbox("🔥 Generar Mapa de Calor en Vivo", disabled=True, help="Se activará al conectar la IA")
+            st.checkbox("🏃 Mostrar Distancia Recorrida", disabled=True, help="Se activará al conectar la IA")
             
             st.divider()
-            st.button("📥 Exportar Reporte de Tracking (.CSV)", use_container_width=True)
+            st.button("📥 Exportar Reporte de Tracking (.CSV)", use_container_width=True, disabled=True)
 
     conn.close()
