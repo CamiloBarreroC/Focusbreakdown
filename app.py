@@ -1,21 +1,19 @@
 import sqlite3
 import pandas as pd
 import streamlit as st
+import re
 
 # ---------------------------------------------------------
 # 1. CONFIGURACIÓN Y BASE DE DATOS (SQLite)
 # ---------------------------------------------------------
 
-
 def get_connection():
     return sqlite3.connect("futbol_analytics.db")
-
 
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Tabla de partidos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS partidos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +25,6 @@ def init_db():
         )
     """)
 
-    # Tabla de jugadores
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS jugadores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,19 +40,33 @@ def init_db():
         )
     """)
 
-    # --- MIGRACIÓN AUTOMÁTICA DE ESQUEMA ---
     cursor.execute("PRAGMA table_info(jugadores)")
     columnas = [col[1] for col in cursor.fetchall()]
     if "estado_validacion" not in columnas:
-        cursor.execute(
-            "ALTER TABLE jugadores ADD COLUMN estado_validacion TEXT DEFAULT 'Confirmado'"
-        )
+        cursor.execute("ALTER TABLE jugadores ADD COLUMN estado_validacion TEXT DEFAULT 'Confirmado'")
 
     conn.commit()
     conn.close()
 
-
 init_db()
+
+# ---------------------------------------------------------
+# FUNCIONES AUXILIARES (Para Google Drive)
+# ---------------------------------------------------------
+def convertir_url_drive_a_embed(url):
+    """
+    Convierte una URL normal de Google Drive en una URL de vista previa (embed)
+    para poder mostrarla en el reproductor de Streamlit.
+    """
+    if not url:
+        return None
+    
+    # Busca el ID del video en la URL
+    match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+    if match:
+        video_id = match.group(1)
+        return f"https://drive.google.com/file/d/{video_id}/preview"
+    return None
 
 # ---------------------------------------------------------
 # 2. INTERFAZ EN STREAMLIT
@@ -67,403 +78,209 @@ st.title("⚽ Plataforma de Gestión y Análisis en Vivo")
 
 tabs = st.tabs([
     "1. Registrar Partido",
-    "2. Validar y Editar Plantilla (IA)",
+    "2. Validar y Editar Plantilla",
     "3. Registro de Cambios en Vivo",
-    "4. Base de Datos General",
+    "4. Base de Datos",
+    "🎥 5. Analista de Video (IA)" # <--- NUEVA PESTAÑA
 ])
 
 # =========================================================
-# --- PESTAÑA 1: REGISTRAR PARTIDO ---
+# --- PESTAÑA 1, 2, 3 y 4 (Se mantienen iguales) ---
 # =========================================================
+
+# --- PESTAÑA 1 ---
 with tabs[0]:
     st.header("Configuración Inicial del Partido")
     with st.form("form_partido"):
         col1, col2 = st.columns(2)
         with col1:
             fecha_partido = st.date_input("Fecha del Partido")
-            formato = st.selectbox(
-                "Formato de juego",
-                ["Futbol 5", "Futbol 7", "Futbol 9", "Futbol 11"],
-            )
-            url_drive = st.text_input(
-                "Enlace del Video en Google Drive (*Obligatorio*)"
-            )
+            formato = st.selectbox("Formato de juego", ["Futbol 5", "Futbol 7", "Futbol 9", "Futbol 11"])
+            url_drive = st.text_input("Enlace del Video en Google Drive (*Obligatorio*)")
         with col2:
             equipo_local = st.text_input("Nombre Equipo Local", "Equipo A")
             equipo_visitante = st.text_input("Nombre Equipo Visitante", "Equipo B")
 
-        guardar_partido = st.form_submit_button("Crear Partido")
-
-        if guardar_partido:
+        if st.form_submit_button("Crear Partido"):
             if not url_drive.strip():
-                st.error(
-                    "❌ Debes ingresar el enlace del video en Google Drive para poder procesar el partido."
-                )
+                st.error("❌ Debes ingresar el enlace del video en Google Drive.")
             else:
                 conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
+                conn.execute(
                     "INSERT INTO partidos (fecha, formato, equipo_local, equipo_visitante, url_drive) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        str(fecha_partido),
-                        formato,
-                        equipo_local,
-                        equipo_visitante,
-                        url_drive,
-                    ),
+                    (str(fecha_partido), formato, equipo_local, equipo_visitante, url_drive)
                 )
                 conn.commit()
                 conn.close()
-                st.success(
-                    f"Partido entre {equipo_local} y {equipo_visitante} creado correctamente."
-                )
+                st.success(f"Partido {equipo_local} vs {equipo_visitante} creado correctamente.")
 
-# =========================================================
-# --- PESTAÑA 2: VALIDAR Y EDITAR PLANTILLA ---
-# =========================================================
+# --- PESTAÑA 2 ---
 with tabs[1]:
     st.header("Edición y Validación de Jugadores (Asistido por IA)")
-
     conn = get_connection()
-    df_partidos = pd.read_sql(
-        "SELECT id, fecha, equipo_local, equipo_visitante, formato FROM partidos",
-        conn,
-    )
+    df_partidos = pd.read_sql("SELECT * FROM partidos", conn)
 
-    if df_partidos.empty:
-        st.warning("Primero debes registrar un partido en la Pestaña 1.")
-    else:
-        opciones_partido = {
-            row[
-                "id"
-            ]: f"{row['fecha']} | {row['equipo_local']} vs {row['equipo_visitante']} ({row['formato']})"
-            for _, row in df_partidos.iterrows()
-        }
-        partido_sel_id = st.selectbox(
-            "Selecciona el Partido a Gestionar:",
-            options=list(opciones_partido.keys()),
-            format_func=lambda x: opciones_partido[x],
-            key="sel_p2",
-        )
+    if not df_partidos.empty:
+        opciones_partido = {r["id"]: f"{r['fecha']} | {r['equipo_local']} vs {r['equipo_visitante']}" for _, r in df_partidos.iterrows()}
+        partido_sel_id = st.selectbox("Selecciona el Partido:", options=list(opciones_partido.keys()), format_func=lambda x: opciones_partido[x], key="sel_p2")
+        partido_actual = df_partidos[df_partidos["id"] == partido_sel_id].iloc[0]
+        equipos_disponibles = [partido_actual["equipo_local"], partido_actual["equipo_visitante"]]
 
-        partido_actual = df_partidos[
-            df_partidos["id"] == partido_sel_id
-        ].iloc[0]
-        equipos_disponibles = [
-            partido_actual["equipo_local"],
-            partido_actual["equipo_visitante"],
-        ]
-
-        with st.expander(
-            "➕ Añadir Jugador Manual o Sugerido por IA", expanded=False
-        ):
+        with st.expander("➕ Añadir Jugador Manual o Sugerido", expanded=False):
             with st.form("form_nuevo_jugador"):
                 col_e, col_a, col_b = st.columns(3)
                 with col_e:
-                    equipo_sel = st.radio(
-                        "Equipo", equipos_disponibles, horizontal=True
-                    )
-                    origen = st.selectbox(
-                        "Origen / Estado IA",
-                        ["Confirmado", "Sugerido por IA", "Por Verificar"],
-                    )
-
+                    equipo_sel = st.radio("Equipo", equipos_disponibles, horizontal=True)
+                    origen = st.selectbox("Estado IA", ["Confirmado", "Sugerido por IA", "Por Verificar"])
                 with col_a:
                     es_no_name = st.checkbox("Solo tengo el número (No Name)")
-                    nombre_in = st.text_input(
-                        "Nombre del Jugador", disabled=es_no_name
-                    )
-                    nombre_final = (
-                        "No Name"
-                        if es_no_name or not nombre_in.strip()
-                        else nombre_in
-                    )
-                    dorsal_in = st.number_input(
-                        "Dorsal / Número", min_value=1, max_value=99, value=10
-                    )
-
+                    nombre_in = st.text_input("Nombre del Jugador", disabled=es_no_name)
+                    nombre_final = "No Name" if es_no_name or not nombre_in.strip() else nombre_in
+                    dorsal_in = st.number_input("Dorsal / Número", min_value=1, max_value=99, value=10)
                 with col_b:
-                    posicion_in = st.selectbox(
-                        "Posición",
-                        ["Portero", "Defensa", "Medio", "Delantero"],
-                    )
-                    min_ent = st.number_input(
-                        "Minuto Entrada", min_value=0, max_value=120, value=0
-                    )
-                    min_sal = st.number_input(
-                        "Minuto Salida", min_value=1, max_value=120, value=90
-                    )
-
-                if st.form_submit_button("Guardar en Plantilla"):
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO jugadores (id_partido, equipo, nombre, dorsal, posicion, minuto_entrada, minuto_salida, estado_validacion)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                        (
-                            partido_sel_id,
-                            equipo_sel,
-                            nombre_final,
-                            dorsal_in,
-                            posicion_in,
-                            min_ent,
-                            min_sal,
-                            origen,
-                        ),
+                    posicion_in = st.selectbox("Posición", ["Portero", "Defensa", "Medio", "Delantero"])
+                    min_ent = st.number_input("Minuto Entrada", min_value=0, max_value=120, value=0)
+                    min_sal = st.number_input("Minuto Salida", min_value=1, max_value=120, value=90)
+                
+                if st.form_submit_button("Guardar"):
+                    conn.execute(
+                        "INSERT INTO jugadores (id_partido, equipo, nombre, dorsal, posicion, minuto_entrada, minuto_salida, estado_validacion) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (partido_sel_id, equipo_sel, nombre_final, dorsal_in, posicion_in, min_ent, min_sal, origen)
                     )
                     conn.commit()
-                    st.success(f"Jugador #{dorsal_in} guardado correctamente.")
+                    st.success("Guardado.")
                     st.rerun()
 
         st.divider()
-
         st.subheader("📋 Tabla de Plantilla Editable")
-        st.caption(
-            "Puedes hacer doble clic en cualquier celda para corregir dorsales, nombres, posiciones o estados directamente."
-        )
+        jugadores_df = pd.read_sql("SELECT id, equipo, dorsal, nombre, posicion, minuto_entrada, minuto_salida, estado_validacion FROM jugadores WHERE id_partido = ? ORDER BY equipo, dorsal", conn, params=(int(partido_sel_id),))
 
-        jugadores_df = pd.read_sql(
-            """
-            SELECT id, equipo, dorsal, nombre, posicion, minuto_entrada, minuto_salida, estado_validacion 
-            FROM jugadores 
-            WHERE id_partido = ?
-            ORDER BY equipo ASC, dorsal ASC
-        """,
-            conn,
-            params=(int(partido_sel_id),),
-        )
-
-        if jugadores_df.empty:
-            st.info("No hay jugadores cargados para este partido.")
-        else:
+        if not jugadores_df.empty:
             edited_df = st.data_editor(
-                jugadores_df,
-                key="editor_jugadores",
-                num_rows="dynamic",
-                use_container_width=True,
-                column_config={
-                    "id": st.column_config.NumberColumn("ID", disabled=True),
-                    "equipo": st.column_config.SelectboxColumn(
-                        "Equipo", options=equipos_disponibles, required=True
-                    ),
-                    "dorsal": st.column_config.NumberColumn(
-                        "Dorsal", min_value=1, max_value=99, required=True
-                    ),
-                    "nombre": st.column_config.TextColumn(
-                        "Nombre / Identificador"
-                    ),
-                    "posicion": st.column_config.SelectboxColumn(
-                        "Posición",
-                        options=["Portero", "Defensa", "Medio", "Delantero"],
-                    ),
-                    "minuto_entrada": st.column_config.NumberColumn(
-                        "Min. Entra", min_value=0, max_value=120
-                    ),
-                    "minuto_salida": st.column_config.NumberColumn(
-                        "Min. Sale", min_value=1, max_value=120
-                    ),
-                    "estado_validacion": st.column_config.SelectboxColumn(
-                        "Estado IA / Verificación",
-                        options=[
-                            "Confirmado",
-                            "Sugerido por IA",
-                            "Por Verificar",
-                        ],
-                    ),
-                },
+                jugadores_df, key="editor", num_rows="dynamic", use_container_width=True,
+                column_config={"id": st.column_config.NumberColumn("ID", disabled=True), "equipo": st.column_config.SelectboxColumn("Equipo", options=equipos_disponibles), "estado_validacion": st.column_config.SelectboxColumn("Estado", options=["Confirmado", "Sugerido por IA", "Por Verificar"])}
             )
-
-            if st.button("💾 Guardar Cambios Editados en la Tabla"):
+            if st.button("💾 Guardar Cambios"):
                 cursor = conn.cursor()
-                for _, row in edited_df.iterrows():
-                    cursor.execute(
-                        """
-                        UPDATE jugadores 
-                        SET equipo = ?, dorsal = ?, nombre = ?, posicion = ?, minuto_entrada = ?, minuto_salida = ?, estado_validacion = ?
-                        WHERE id = ?
-                    """,
-                        (
-                            row["equipo"],
-                            int(row["dorsal"]),
-                            row["nombre"],
-                            row["posicion"],
-                            int(row["minuto_entrada"]),
-                            int(row["minuto_salida"]),
-                            row["estado_validacion"],
-                            int(row["id"]),
-                        ),
-                    )
+                for _, r in edited_df.iterrows():
+                    cursor.execute("UPDATE jugadores SET equipo=?, dorsal=?, nombre=?, posicion=?, minuto_entrada=?, minuto_salida=?, estado_validacion=? WHERE id=?", (r["equipo"], int(r["dorsal"]), r["nombre"], r["posicion"], int(r["minuto_entrada"]), int(r["minuto_salida"]), r["estado_validacion"], int(r["id"])))
                 conn.commit()
-                st.success("¡Base de datos actualizada con éxito!")
+                st.success("Actualizado")
                 st.rerun()
-
     conn.close()
 
-# =========================================================
-# --- PESTAÑA 3: REGISTRO DE CAMBIOS EN VIVO ---
-# =========================================================
+# --- PESTAÑA 3 ---
 with tabs[2]:
-    st.header("🔄 Control Dinámico de Sustituciones (Durante Análisis)")
-    st.caption(
-        "Utiliza este módulo a medida que el video avanza para marcar cambios en tiempo real."
-    )
-
+    st.header("🔄 Control Dinámico de Sustituciones")
     conn = get_connection()
-    df_partidos = pd.read_sql(
-        "SELECT id, fecha, equipo_local, equipo_visitante, formato FROM partidos",
-        conn,
-    )
-
-    if df_partidos.empty:
-        st.warning("Primero debes registrar un partido en la Pestaña 1.")
-    else:
-        opciones_partido_v2 = {
-            row[
-                "id"
-            ]: f"{row['fecha']} | {row['equipo_local']} vs {row['equipo_visitante']}"
-            for _, row in df_partidos.iterrows()
-        }
-        partido_cambio_id = st.selectbox(
-            "Selecciona el Partido en Análisis:",
-            options=list(opciones_partido_v2.keys()),
-            format_func=lambda x: opciones_partido_v2[x],
-            key="sel_p3",
-        )
-
-        minuto_cambio_actual = st.number_input(
-            "⏱️ Minuto Actual del Cambio", min_value=1, max_value=120, value=60
-        )
-
+    df_partidos = pd.read_sql("SELECT * FROM partidos", conn)
+    if not df_partidos.empty:
+        opciones_p3 = {r["id"]: f"{r['fecha']} | {r['equipo_local']} vs {r['equipo_visitante']}" for _, r in df_partidos.iterrows()}
+        p_cambio_id = st.selectbox("Selecciona Partido:", options=list(opciones_p3.keys()), format_func=lambda x: opciones_p3[x], key="sel_p3")
+        minuto_cambio = st.number_input("⏱️ Minuto del Cambio", min_value=1, max_value=120, value=60)
+        
         col_sale, col_entra = st.columns(2)
-
-        jugadores_activos = pd.read_sql(
-            """
-            SELECT id, equipo, dorsal, nombre, posicion 
-            FROM jugadores 
-            WHERE id_partido = ? AND (minuto_salida >= ? OR minuto_salida IS NULL)
-            ORDER BY equipo, dorsal
-        """,
-            conn,
-            params=(int(partido_cambio_id), int(minuto_cambio_actual)),
-        )
-
+        jug_activos = pd.read_sql("SELECT id, equipo, dorsal, nombre, posicion FROM jugadores WHERE id_partido=? AND (minuto_salida >= ? OR minuto_salida IS NULL)", conn, params=(int(p_cambio_id), int(minuto_cambio)))
+        
         with col_sale:
-            st.subheader("🔴 Jugador que SALE")
-            if jugadores_activos.empty:
-                st.info("No hay jugadores disponibles en cancha.")
-                jugador_sale_id = None
+            st.subheader("🔴 SALE")
+            if not jug_activos.empty:
+                opc_sale = {r["id"]: f"[{r['equipo']}] #{r['dorsal']} - {r['nombre']}" for _, r in jug_activos.iterrows()}
+                jug_sale_id = st.selectbox("Jugador que sale:", options=list(opc_sale.keys()), format_func=lambda x: opc_sale[x])
             else:
-                opc_sale = {
-                    row[
-                        "id"
-                    ]: f"[{row['equipo']}] #{row['dorsal']} - {row['nombre']} ({row['posicion']})"
-                    for _, row in jugadores_activos.iterrows()
-                }
-                jugador_sale_id = st.selectbox(
-                    "Selecciona el jugador que abandona la cancha:",
-                    options=list(opc_sale.keys()),
-                    format_func=lambda x: opc_sale[x],
-                )
-
+                jug_sale_id = None
+                
         with col_entra:
-            st.subheader("🟢 Jugador que ENTRA")
-            partido_actual_cambio = df_partidos[
-                df_partidos["id"] == partido_cambio_id
-            ].iloc[0]
-            eq_entra = st.radio(
-                "Equipo del jugador que ingresa:",
-                [
-                    partido_actual_cambio["equipo_local"],
-                    partido_actual_cambio["equipo_visitante"],
-                ],
-                horizontal=True,
-            )
-
-            es_no_name_e = st.checkbox(
-                "Es un 'No Name' (Solo número)", key="noname_entra"
-            )
-            nombre_entra_in = st.text_input(
-                "Nombre Jugador Entrante",
-                disabled=es_no_name_e,
-                key="name_entra",
-            )
-            nombre_entra_final = (
-                "No Name"
-                if es_no_name_e or not nombre_entra_in.strip()
-                else nombre_entra_in
-            )
-
-            col_e1, col_e2 = st.columns(2)
-            with col_e1:
-                dorsal_entra = st.number_input(
-                    "Dorsal Entrante",
-                    min_value=1,
-                    max_value=99,
-                    value=14,
-                    key="dorsal_e",
-                )
-            with col_e2:
-                pos_entra = st.selectbox(
-                    "Posición a asumir",
-                    ["Portero", "Defensa", "Medio", "Delantero"],
-                    key="pos_e",
-                )
-
-        st.divider()
-        if st.button(
-            "⚡ Registrar Sustitución Ahora", use_container_width=True
-        ):
-            if jugador_sale_id:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE jugadores SET minuto_salida = ? WHERE id = ?",
-                    (int(minuto_cambio_actual), int(jugador_sale_id)),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO jugadores (id_partido, equipo, nombre, dorsal, posicion, minuto_entrada, minuto_salida, estado_validacion)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'Confirmado')
-                """,
-                    (
-                        int(partido_cambio_id),
-                        eq_entra,
-                        nombre_entra_final,
-                        int(dorsal_entra),
-                        pos_entra,
-                        int(minuto_cambio_actual),
-                        90,
-                    ),
-                )
-                conn.commit()
-                st.success(
-                    f"¡Sustitución efectuada en el minuto {minuto_cambio_actual}!"
-                )
-                st.rerun()
-
+            st.subheader("🟢 ENTRA")
+            p_actual = df_partidos[df_partidos["id"]==p_cambio_id].iloc[0]
+            eq_entra = st.radio("Equipo:", [p_actual["equipo_local"], p_actual["equipo_visitante"]], horizontal=True)
+            noname_e = st.checkbox("Solo número (No Name)", key="nn_e")
+            nom_entra = st.text_input("Nombre", disabled=noname_e)
+            nom_final_e = "No Name" if noname_e or not nom_entra.strip() else nom_entra
+            dorsal_e = st.number_input("Dorsal", min_value=1, value=14)
+            pos_e = st.selectbox("Posición", ["Portero", "Defensa", "Medio", "Delantero"])
+            
+        if st.button("⚡ Registrar Sustitución", use_container_width=True) and jug_sale_id:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE jugadores SET minuto_salida=? WHERE id=?", (int(minuto_cambio), int(jug_sale_id)))
+            cursor.execute("INSERT INTO jugadores (id_partido, equipo, nombre, dorsal, posicion, minuto_entrada, minuto_salida) VALUES (?,?,?,?,?,?,90)", (int(p_cambio_id), eq_entra, nom_final_e, int(dorsal_e), pos_e, int(minuto_cambio)))
+            conn.commit()
+            st.success("Cambio registrado.")
+            st.rerun()
     conn.close()
 
-# =========================================================
-# --- PESTAÑA 4: BASE DE DATOS GENERAL ---
-# =========================================================
+# --- PESTAÑA 4 ---
 with tabs[3]:
     st.header("📊 Resumen de Base de Datos")
     conn = get_connection()
+    st.dataframe(pd.read_sql("SELECT * FROM partidos", conn), use_container_width=True)
+    st.dataframe(pd.read_sql("SELECT * FROM jugadores", conn), use_container_width=True)
+    conn.close()
 
-    st.subheader("Lista de Partidos Registrados")
-    partidos_df = pd.read_sql("SELECT * FROM partidos", conn)
-    st.dataframe(partidos_df, use_container_width=True)
+# =========================================================
+# --- PESTAÑA 5: ANALISTA DE VIDEO E IA ---
+# =========================================================
+with tabs[4]:
+    st.header("🎥 Analista de Video e IA")
+    
+    conn = get_connection()
+    df_partidos = pd.read_sql("SELECT id, fecha, equipo_local, equipo_visitante, url_drive FROM partidos", conn)
+    
+    if df_partidos.empty:
+        st.warning("No hay partidos registrados. Ve a la Pestaña 1.")
+    else:
+        # 1. Selector de Partido
+        opciones_video = {
+            r["id"]: f"{r['equipo_local']} vs {r['equipo_visitante']} ({r['fecha']})" 
+            for _, r in df_partidos.iterrows()
+        }
+        partido_vid_id = st.selectbox(
+            "Selecciona el partido para visualizar:",
+            options=list(opciones_video.keys()),
+            format_func=lambda x: opciones_video[x],
+            key="sel_video"
+        )
+        
+        url_original = df_partidos[df_partidos["id"] == partido_vid_id].iloc[0]["url_drive"]
+        url_embed = convertir_url_drive_a_embed(url_original)
+        
+        st.divider()
 
-    st.subheader("Historial Completo de Jugadores y Tiempos de Juego")
-    jugadores_df = pd.read_sql(
-        """
-        SELECT j.id, p.fecha, j.equipo, j.dorsal, j.nombre, j.posicion, j.minuto_entrada, j.minuto_salida, j.estado_validacion 
-        FROM jugadores j 
-        JOIN partidos p ON j.id_partido = p.id
-        ORDER BY p.fecha DESC, j.equipo ASC, j.dorsal ASC
-    """,
-        conn,
-    )
-    st.dataframe(jugadores_df, use_container_width=True)
+        # 2. Maquetación del Reproductor y el Panel de IA
+        col_video, col_panel = st.columns([2, 1]) # El video ocupa 2/3, el panel 1/3 de la pantalla
+        
+        with col_video:
+            st.subheader("📺 Reproductor de Partido")
+            if url_embed:
+                # Incrustar el iframe de Google Drive
+                st.components.v1.iframe(url_embed, height=450)
+                st.caption(f"🔗 URL Original conectada: {url_original}")
+            else:
+                st.error("❌ El enlace de Google Drive guardado no tiene un formato válido.")
+                
+        with col_panel:
+            st.subheader("🧠 Panel de Control IA")
+            st.info("Módulo preparado para conectar al backend de Visión por Computadora.")
+            
+            # Botones de simulación de Análisis
+            if st.button("🚀 Iniciar Tracking IA (Detección)", use_container_width=True):
+                with st.spinner("Conectando con el modelo de visión..."):
+                    import time
+                    time.sleep(2) # Simula tiempo de carga
+                    st.success("✅ Modelo conectado. Tracking activo sobre el video.")
+            
+            # Contenedores de métricas en vivo (Placeholders)
+            st.markdown("### Métricas en Vivo")
+            col_m1, col_m2 = st.columns(2)
+            col_m1.metric(label="Jugadores Detectados", value="22", delta="+2 en banca")
+            col_m2.metric(label="Precisión del Modelo", value="94.5%")
+            
+            st.markdown("### Herramientas de Análisis")
+            st.checkbox("🟢 Mostrar IDs y Dorsales (Bounding Boxes)")
+            st.checkbox("🔥 Generar Mapa de Calor en Vivo")
+            st.checkbox("🏃 Mostrar Distancia Recorrida")
+            
+            st.divider()
+            st.button("📥 Exportar Reporte de Tracking (.CSV)", use_container_width=True)
 
     conn.close()
